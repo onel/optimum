@@ -1,0 +1,269 @@
+<!--Copyright 2025 The HuggingFace Team. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+
+# Architecture Overview
+
+This document explains how Optimum's components work together to provide hardware-accelerated inference and training across multiple platforms.
+
+## Design Philosophy
+
+Optimum extends the Hugging Face ecosystem (Transformers, Diffusers, TIMM, Sentence-Transformers) with optimization capabilities while maintaining API compatibility. The core principle is simple: replace a standard model class with an accelerator-specific one, and the rest of your code remains unchanged.
+
+This design allows developers to:
+- Switch between hardware backends with minimal code changes
+- Leverage hardware-specific optimizations without learning new APIs
+- Use familiar Hugging Face workflows (pipelines, trainers, etc.)
+
+## Core Design Pattern
+
+Optimum uses a consistent **model replacement pattern** across all integrations:
+
+```python
+# Standard Transformers
+from transformers import AutoModelForSequenceClassification
+model = AutoModelForSequenceClassification.from_pretrained(model_id)
+
+# Optimum with OpenVINO
+from optimum.intel.openvino import OVModelForSequenceClassification
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
+
+# Optimum with ONNX Runtime
+from optimum.onnxruntime import ORTModelForSequenceClassification
+model = ORTModelForSequenceClassification.from_pretrained(model_id, export=True)
+```
+
+Each accelerator provides its own `AcceleratorModelForXxx` classes that mirror the Transformers API. The `export=True` parameter triggers automatic model conversion to the target format.
+
+## Package Structure
+
+Optimum is distributed as a collection of packages:
+
+### Core Package (`optimum`)
+
+The main package provides:
+- **Exporters**: Convert PyTorch models to formats like ONNX
+- **Base abstractions**: Common interfaces for quantizers, optimizers, and trainers
+- **Utilities**: Shared tools for model optimization
+
+### Accelerator Packages
+
+Each hardware platform has a dedicated package:
+
+- **`optimum-onnx`**: ONNX export and ONNX Runtime integration
+- **`optimum-intel`**: OpenVINO, Neural Compressor, and IPEX support
+- **`optimum-neuron`**: AWS Trainium and Inferentia
+- **`optimum-habana`**: Intel Gaudi accelerators
+- **`optimum-nvidia`**: NVIDIA TensorRT-LLM
+- **`optimum-amd`**: AMD Instinct GPUs and Ryzen AI NPUs
+- **`optimum-tpu`**: Google TPUs
+- **`optimum-furiosa`**: FuriosaAI WARBOY
+
+This separation allows:
+- Independent versioning and release cycles
+- Minimal dependencies (install only what you need)
+- Hardware-specific optimizations without bloating the core package
+
+## Accelerator Integration Architecture
+
+Each accelerator integration typically provides:
+
+### 1. Model Classes
+
+Accelerator-specific model classes that inherit from base Optimum classes:
+
+```python
+OVModelForSequenceClassification  # OpenVINO
+ORTModelForCausalLM              # ONNX Runtime
+```
+
+These classes handle:
+- Model loading and conversion
+- Inference execution on the target hardware
+- Compatibility with Transformers pipelines
+
+### 2. Training Components
+
+Custom trainers that extend the Transformers `Trainer`:
+
+```python
+GaudiTrainer          # Habana Gaudi
+NeuronTrainer         # AWS Trainium
+```
+
+These trainers integrate:
+- Hardware-specific training loops
+- Distributed training support
+- Mixed precision training
+
+### 3. Optimization Tools
+
+Quantizers and optimizers for model compression:
+
+```python
+ORTQuantizer          # ONNX Runtime quantization
+INCQuantizer          # Intel Neural Compressor
+```
+
+### 4. Configuration Objects
+
+Hardware-specific configuration classes:
+
+```python
+GaudiConfig           # Habana configuration
+AutoQuantizationConfig # Quantization settings
+```
+
+## Key Abstractions
+
+### Exporters
+
+The `exporters` module provides a unified interface for converting models to different formats:
+
+- **ONNX export**: Convert PyTorch models to ONNX format
+- **OpenVINO export**: Convert to OpenVINO IR
+- **Neuron export**: Compile for AWS Inferentia/Trainium
+
+Exporters handle:
+- Model graph tracing and conversion
+- Input/output signature definition
+- Validation of exported models
+
+### Quantizers
+
+Quantizers reduce model precision to improve performance:
+
+- **Dynamic quantization**: Quantize activations at runtime
+- **Static quantization**: Pre-compute quantization parameters using calibration data
+- **Quantization-aware training**: Train models with quantization in mind
+
+Each quantizer follows a common pattern:
+1. Define quantization configuration
+2. Apply quantization to the model
+3. Save the quantized model
+
+### Optimizers
+
+Optimizers apply graph-level transformations:
+
+- **Graph optimization**: Fuse operations, eliminate redundant nodes
+- **Constant folding**: Pre-compute constant expressions
+- **Layout optimization**: Reorder operations for better hardware utilization
+
+### Trainers
+
+Custom trainers extend Transformers' `Trainer` with hardware-specific features:
+
+- Device placement and memory management
+- Distributed training strategies
+- Hardware-specific optimizations (gradient accumulation, mixed precision)
+
+## Extension Points
+
+To add support for a new accelerator:
+
+### 1. Create Model Classes
+
+Implement accelerator-specific model classes:
+
+```python
+from optimum.modeling_base import OptimizedModel
+
+class AcceleratorModelForXxx(OptimizedModel):
+    def __init__(self, model, config):
+        # Initialize with accelerator-specific runtime
+        pass
+    
+    def forward(self, *args, **kwargs):
+        # Execute inference on target hardware
+        pass
+```
+
+### 2. Implement Export Logic
+
+Add export functionality to convert PyTorch models:
+
+```python
+from optimum.exporters import ExportConfig
+
+class AcceleratorExportConfig(ExportConfig):
+    def generate_model(self):
+        # Convert PyTorch model to target format
+        pass
+```
+
+### 3. Add Optimization Tools
+
+Implement quantizers and optimizers:
+
+```python
+from optimum.quantization import Quantizer
+
+class AcceleratorQuantizer(Quantizer):
+    def quantize(self, model, config):
+        # Apply quantization
+        pass
+```
+
+### 4. Create Trainer (Optional)
+
+For training support, extend the Transformers `Trainer`:
+
+```python
+from transformers import Trainer
+
+class AcceleratorTrainer(Trainer):
+    def training_step(self, model, inputs):
+        # Hardware-specific training logic
+        pass
+```
+
+### 5. Package and Document
+
+- Create a separate `optimum-accelerator` package
+- Add installation instructions
+- Provide usage examples and benchmarks
+
+## Component Interaction
+
+Here's how components interact during inference:
+
+1. **Model Loading**: User calls `AcceleratorModelForXxx.from_pretrained()`
+2. **Export (if needed)**: Exporter converts PyTorch model to target format
+3. **Optimization**: Quantizer/optimizer applies transformations
+4. **Inference**: Model executes on target hardware
+5. **Output**: Results returned in standard format
+
+For training:
+
+1. **Setup**: User creates `AcceleratorTrainer` with model and config
+2. **Initialization**: Trainer sets up hardware-specific components
+3. **Training Loop**: Custom training step executes on target hardware
+4. **Checkpointing**: Model saved in compatible format
+
+## Performance Considerations
+
+Optimum's architecture enables several performance optimizations:
+
+- **Lazy loading**: Models loaded only when needed
+- **Graph optimization**: Automatic fusion and optimization of operations
+- **Memory management**: Hardware-specific memory allocation strategies
+- **Batching**: Efficient batch processing for inference
+
+## Compatibility
+
+Optimum maintains compatibility with:
+
+- **Transformers pipelines**: All model classes work with `pipeline()`
+- **Hugging Face Hub**: Models can be pushed/pulled from the Hub
+- **Standard interfaces**: Consistent APIs across accelerators
+
+This architecture allows Optimum to scale across hardware platforms while maintaining a simple, consistent developer experience.
